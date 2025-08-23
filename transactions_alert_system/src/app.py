@@ -62,7 +62,7 @@ async def process_transactions(
 @app.post("/query")
 async def query_transactions(
     query: TransactionQuery, session: Session = Depends(get_session)
-) -> List[Dict[str, float | str]]:
+) -> List[Transaction]:
     # Build query for transactions
     statement = select(TransactionDB)
 
@@ -75,16 +75,11 @@ async def query_transactions(
 
     transactions = session.exec(statement).all()
 
-    # Convert to DataFrame for aggregation
-    df = pd.DataFrame(
-        [
-            {"time": tx.time, "status": tx.status, "count": tx.count}
-            for tx in transactions
-        ]
-    )
-
-    # Extract hour from time string (format: "XXh XX")
-    df["hour"] = df["time"].str.extract(r"(\d{2})h").astype(int)
+    # Convert DB models to Transaction models and return
+    return [
+        Transaction(time=tx.time, status=tx.status, count=tx.count)
+        for tx in transactions
+    ]
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
