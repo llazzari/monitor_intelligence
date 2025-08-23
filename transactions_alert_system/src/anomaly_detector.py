@@ -6,11 +6,13 @@ from sqlmodel import Session, select
 from .db_models import TransactionDB
 from .models import Transaction, TransactionStatus
 
+BAD_STATUS: List[str] = ["failed", "denied", "reversed"]
+
 
 class AnomalyDetector:
     def __init__(self, session: Session):
         self.session = session
-        self.baseline_stats = {}
+        self.baseline_stats: dict[str, float] = {}
         self._load_baseline()
 
     def _load_baseline(self) -> None:
@@ -64,12 +66,10 @@ class AnomalyDetector:
             status = row["status"]
             count = row["count"]
             time = row["time"]
-
             if status not in self.baseline_stats:
                 continue
 
             baseline = self.baseline_stats[status]
-
             # selects the maximum between 1 and the real standard deviation to avoid small values
             sigma: float = max(1.0, float(baseline["std"]))
             # Calculate z-score
@@ -80,7 +80,7 @@ class AnomalyDetector:
             is_warning = False
             message = ""
 
-            if status in ["failed", "denied", "reversed"]:
+            if status in BAD_STATUS:
                 if count > baseline["p99"]:
                     is_critical = True
                     message = f"Count ({count}) exceeds 99th percentile ({baseline['p99']:.2f})"
