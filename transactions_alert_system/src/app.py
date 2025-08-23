@@ -1,33 +1,58 @@
 import pathlib
 from contextlib import asynccontextmanager
-from typing import Dict, List
 
 import pandas as pd
-import plotly.express as px
+import plotly.express as px  # type: ignore
 from fastapi import Depends, FastAPI
 from fastapi.responses import HTMLResponse
 from sqlmodel import Session, select
 
 from .anomaly_detector import AnomalyDetector
-from .db_models import TransactionDB
-from .models import Anomaly, AnomalyResponse, Transaction, TransactionQuery
+from .models import (
+    AnomalyBase,
+    AnomalyDB,
+    AnomalyResponse,
+    TransactionBase,
+    TransactionDB,
+    TransactionQuery,
+    TransactionStatus,
+)
 from .notification import NotificationService
 from .session import engine, get_session, init_db
+
+DATA_PATH = pathlib.Path.cwd() / "transactions_alert_system" / "data"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
     # Initialize baseline on startup using transactions_1.csv data
+    # Insert transactions_2.csv data into transactions.db (if it is not there yet)
     with Session(engine) as session:
         detector = AnomalyDetector(session)
-        historical_data = pd.read_csv(
-            pathlib.Path.cwd()
-            / "transactions_alert_system"
-            / "data"
-            / "transactions_1.csv"
-        )
+        historical_data = pd.read_csv(DATA_PATH / "transactions_1.csv")  # type: ignore
         detector.update_baseline(historical_data)
+
+        # Check if transactions_2.csv data is already in the database
+        existing_data = session.exec(select(TransactionDB)).all()
+        if not existing_data:
+            new_data = pd.read_csv(DATA_PATH / "transactions_2.csv")  # type: ignore
+            new_transactions = [
+                TransactionBase(**transaction)  # type: ignore
+                for transaction in new_data.to_dict("records")  # type: ignore
+            ]
+
+            anomalies: list[AnomalyBase] = detector.detect_anomalies(new_transactions)
+
+            for tx in new_transactions:
+                db_tx = TransactionDB(**tx.model_dump())
+                session.add(db_tx)
+
+            for anomaly in anomalies:
+                db_anomaly = AnomalyDB(**anomaly.model_dump())
+                session.add(db_anomaly)
+
+            session.commit()
     yield
 
 
@@ -37,33 +62,33 @@ notification_service = NotificationService()
 
 @app.post("/transactions", response_model=AnomalyResponse)
 async def process_transactions(
-    transactions: list[Transaction], session: Session = Depends(get_session)
+    transactions: list[TransactionBase], session: Session = Depends(get_session)
 ):
-    # Save transactions to database
     for tx in transactions:
-        db_tx = TransactionDB(time=tx.time, status=tx.status, count=tx.count)
+        db_tx = TransactionDB(**tx.model_dump())
         session.add(db_tx)
-    session.commit()
 
-    # Detect anomalies
     detector = AnomalyDetector(session)
-    anomalies: List[Dict[str, float | str]] = detector.detect_anomalies(transactions)
+    anomalies = detector.detect_anomalies(transactions)
 
-    # Send notifications if there are anomalies
     if anomalies:
+        for anomaly in anomalies:
+            db_anomaly = AnomalyDB(**anomaly.model_dump())
+            session.add(db_anomaly)
         notification_service.send_alert(anomalies)
+
+    session.commit()
 
     return AnomalyResponse(
         message="Transactions processed successfully",
-        anomalies=[Anomaly(**anomaly) for anomaly in anomalies],
+        anomalies=anomalies,
     )
 
 
-@app.post("/query")
+@app.post("/query", response_model=list[TransactionBase])
 async def query_transactions(
     query: TransactionQuery, session: Session = Depends(get_session)
-) -> List[Transaction]:
-    # Build query for transactions
+) -> list[TransactionBase]:
     statement = select(TransactionDB)
 
     if query.start_hour:
@@ -75,26 +100,35 @@ async def query_transactions(
 
     transactions = session.exec(statement).all()
 
-    # Convert DB models to Transaction models and return
     return [
-        Transaction(time=tx.time, status=tx.status, count=tx.count)
+        TransactionBase(
+            time=tx.time, status=TransactionStatus(tx.status), count=tx.count
+        )
         for tx in transactions
     ]
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(session: Session = Depends(get_session)):
-    # Get all transactions and process them
-    statement = select(TransactionDB)
+    # Get transactions from the last hour (23h 00 to 23h 59)
+    statement = select(TransactionDB).where(
+        TransactionDB.time >= "23h 00", TransactionDB.time <= "23h 59"
+    )
     transactions = session.exec(statement).all()
 
     if not transactions:
-        return HTMLResponse(content="<h2>No transactions found</h2>", status_code=404)
+        return HTMLResponse(
+            content="<h2>No transactions found for the last hour</h2>", status_code=404
+        )
 
     # Convert to DataFrame
     df = pd.DataFrame(
         [
-            {"time": tx.time, "status": tx.status, "count": tx.count}
+            {
+                "time": tx.time,
+                "status": tx.status,
+                "count": tx.count,
+            }
             for tx in transactions
         ]
     )
@@ -103,15 +137,59 @@ async def dashboard(session: Session = Depends(get_session)):
     df["hour"] = df["time"].str.extract(r"(\d{2})h").astype(int)
     df = df.sort_values("hour")
 
+    # Get anomalies for the same time period
+    anomaly_statement = select(AnomalyDB).where(
+        AnomalyDB.transaction.time >= "23h 00", AnomalyDB.transaction.time <= "23h 59"
+    )
+    anomalies_db = session.exec(anomaly_statement).all()
+
     # Create transaction volume plot
-    fig1 = px.line(
+    fig1 = px.line(  # type: ignore
         df,
         x="time",
         y="count",
         color="status",
-        title="Transaction Volume Over Time by Status",
+        title="Transaction Volume Over Time by Status (⚠️ marks anomalies)",
+        color_discrete_map={
+            "approved": "#3A8309",
+            "declined": "#FF0000",
+            "failed": "#D10000",
+            "reversed": "#FF7276",
+            "backend_reversed": "#FFB3B3",
+            "refunded": "blue",
+        },
+        # markers=True,
     )
-    fig1.update_layout(
+
+    print("Anomalies found in DB:", len(anomalies_db))
+    # Add special markers for anomalies
+    for status in df["status"].unique():
+        # Filter anomalies for this status and print debug info
+        status_anomalies = [a for a in anomalies_db if a.transaction.status == status]
+        print(f"Anomalies for status {status}:", len(status_anomalies))
+
+        if status_anomalies:
+            print(f"Adding markers for {status} anomalies:")
+            for anomaly in status_anomalies:
+                print(
+                    f"  - time: {anomaly.transaction.time}, count: {anomaly.transaction.count}, level: {anomaly.level}"
+                )
+
+            fig1.add_scatter(  # type: ignore
+                x=[a.transaction.time for a in status_anomalies],
+                y=[a.transaction.count for a in status_anomalies],
+                mode="markers",
+                marker=dict(
+                    symbol="star",
+                    size=12,
+                    line=dict(width=2, color="black"),
+                    color="red",  # Make anomalies stand out
+                ),
+                name=f"{status} (Anomaly)",
+                showlegend=True,  # Show in legend to distinguish anomalies
+            )
+
+    fig1.update_layout(  # type: ignore
         xaxis_title="Hour",
         yaxis_title="Transaction Count",
         height=400,
@@ -119,26 +197,27 @@ async def dashboard(session: Session = Depends(get_session)):
     )
 
     # Create status breakdown plot
-    status_totals = df.groupby("status")["count"].sum().reset_index()
-    fig2 = px.bar(
+    status_totals = df.groupby("status")["count"].sum().reset_index()  # type: ignore
+    fig2 = px.bar(  # type: ignore
         status_totals,
         x="status",
         y="count",
         title="Total Transactions by Status",
+        text="count",
     )
-    fig2.update_layout(xaxis_title="Status", yaxis_title="Total Count", height=400)
+    fig2.update_layout(xaxis_title="Status", yaxis_title="Total Count", height=400)  # type: ignore
 
     # Get anomaly statistics
     detector = AnomalyDetector(session)
     anomalies = detector.detect_anomalies(
         [
-            Transaction(time=row["time"], status=row["status"], count=row["count"])
+            TransactionBase(time=row["time"], status=row["status"], count=row["count"])
             for _, row in df.iterrows()
         ]
     )
 
-    critical_count = len([a for a in anomalies if a["level"] == "CRITICAL"])
-    warning_count = len([a for a in anomalies if a["level"] == "WARNING"])
+    critical_count = len([a for a in anomalies if a.level == "CRITICAL"])
+    warning_count = len([a for a in anomalies if a.level == "WARNING"])
 
     dashboard_html = f"""
     <html>
@@ -193,18 +272,18 @@ async def dashboard(session: Session = Depends(get_session)):
                 
                 <div class="stats-container">
                     <div class="stat-box">
-                        <h3>Last 24 Hours</h3>
+                        <h3>Last Hour (23h)</h3>
                         <p>Total Transactions: {df["count"].sum()}</p>
                     </div>
                     <div class="stat-box">
-                        <h3>Anomalies</h3>
+                        <h3>Anomalies in Last Hour</h3>
                         <p class="critical">Critical: {critical_count}</p>
                         <p class="warning">Warnings: {warning_count}</p>
                     </div>
                 </div>
                 
                 <div class="plot-container">
-                    {fig1.to_html(full_html=False)}
+                    {fig1.to_html(full_html=False)} 
                 </div>
                 <div class="plot-container">
                     {fig2.to_html(full_html=False)}

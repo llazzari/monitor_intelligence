@@ -1,19 +1,37 @@
-from typing import Dict, List
-
 import pandas as pd
 from sqlmodel import Session, select
 
-from .db_models import TransactionDB
-from .models import Transaction, TransactionStatus
+from .models import (
+    AlertLevel,
+    AnomalyBase,
+    BaselineDB,
+    Stats,
+    TransactionBase,
+    TransactionDB,
+    TransactionStatus,
+)
 
-BAD_STATUS: List[str] = ["failed", "denied", "reversed"]
+BAD_STATUS: list[str] = ["failed", "denied", "reversed"]
 
 
 class AnomalyDetector:
-    def __init__(self, session: Session):
+    def __init__(self, session: Session) -> None:
         self.session = session
-        self.baseline_stats: dict[str, float] = {}
+        self.baseline_stats: dict[str, Stats] = {}
         self._load_baseline()
+
+    def _get_baseline_by_status(self, df: pd.DataFrame) -> None:
+        """Get baseline statistics by transaction status"""
+        for status in TransactionStatus:
+            status_data = df[df["status"] == status.value]
+            if not status_data.empty:
+                stats = Stats(
+                    mean=float(status_data["count"].mean()),
+                    std=float(status_data["count"].std()),
+                    p95=float(status_data["count"].quantile(0.95)),
+                    p99=float(status_data["count"].quantile(0.99)),
+                )
+                self.baseline_stats[status.value] = stats
 
     def _load_baseline(self) -> None:
         """Load baseline data"""
@@ -22,92 +40,74 @@ class AnomalyDetector:
         if not results:
             return
 
-        df = pd.DataFrame(
-            [
-                {"time": tx.time, "status": tx.status, "count": tx.count}
-                for tx in results
-            ]
-        )
+        df = pd.DataFrame([tx.model_dump() for tx in results])
 
-        # Calculate baseline statistics for each status
-        for status in TransactionStatus:
-            status_data = df[df["status"] == status.value]
-            if not status_data.empty:
-                self.baseline_stats[status.value] = {
-                    "mean": float(status_data["count"].mean()),
-                    "std": float(status_data["count"].std()),
-                    "p95": float(status_data["count"].quantile(0.95)),
-                    "p99": float(status_data["count"].quantile(0.99)),
-                }
+        self._get_baseline_by_status(df)
 
-    def update_baseline(self, historical_data: pd.DataFrame):
+    def update_baseline(self, historical_data: pd.DataFrame) -> None:
         """Update baseline using historical data"""
-        for status in TransactionStatus:
-            status_data = historical_data[historical_data["status"] == status.value]
-            if not status_data.empty:
-                self.baseline_stats[status.value] = {
-                    "mean": float(status_data["count"].mean()),
-                    "std": float(status_data["count"].std()),
-                    "p95": float(status_data["count"].quantile(0.95)),
-                    "p99": float(status_data["count"].quantile(0.99)),
-                }
+
+        self._get_baseline_by_status(historical_data)
+        for status, stats in self.baseline_stats.items():
+            self.session.add(
+                BaselineDB(**stats.model_dump(), status=TransactionStatus(status))
+            )
 
     def detect_anomalies(
-        self, transactions: List[Transaction]
-    ) -> List[Dict[str, str | float]]:
+        self, transactions: list[TransactionBase]
+    ) -> list[AnomalyBase]:
         """Detect anomalies in transactions"""
-        anomalies: List[Dict[str, str | float]] = []
+        anomalies: list[AnomalyBase] = []
 
-        # Group transactions by hour and status
-        df = pd.DataFrame([tx.model_dump() for tx in transactions])
-        grouped = df.groupby(["status", "time"])["count"].sum().reset_index()
+        # Group transactions by hour and status using defaultdict
+        from collections import defaultdict
 
-        for _, row in grouped.iterrows():
-            status = row["status"]
-            count = row["count"]
-            time = row["time"]
+        grouped_data: defaultdict[tuple[str, str], int] = defaultdict(int)
+        for tx in transactions:
+            grouped_data[(tx.status, tx.time)] += tx.count
+
+        # Process each group
+        for (status, time), count in grouped_data.items():
             if status not in self.baseline_stats:
                 continue
 
             baseline = self.baseline_stats[status]
-            # selects the maximum between 1 and the real standard deviation to avoid small values
-            sigma: float = max(1.0, float(baseline["std"]))
-            # Calculate z-score
-            z_score: float = (count - baseline["mean"]) / sigma
+            sigma: float = max(1.0, float(baseline.std))
+            z_score: float = (count - baseline.mean) / sigma
 
-            # Check for anomalies based on status
-            is_critical = False
-            is_warning = False
+            # Only check anomalies for bad status transactions
+            if status not in BAD_STATUS:
+                continue
+
+            # Determine anomaly level and message
+            level = None
             message = ""
 
-            if status in BAD_STATUS:
-                if count > baseline["p99"]:
-                    is_critical = True
-                    message = f"Count ({count}) exceeds 99th percentile ({baseline['p99']:.2f})"
-                elif count > baseline["p95"]:
-                    is_warning = True
-                    message = f"Count ({count}) exceeds 95th percentile ({baseline['p95']:.2f})"
-                elif abs(z_score) > 3:
-                    is_critical = True
-                    message = (
-                        f"Count ({count}) is more than 3 standard deviations from mean"
-                    )
-                elif abs(z_score) > 2:
-                    is_warning = True
-                    message = (
-                        f"Count ({count}) is more than 2 standard deviations from mean"
-                    )
+            if count > baseline.p99 or abs(z_score) > 3:
+                level = AlertLevel.CRITICAL
+                message = (
+                    f"Count ({count}) exceeds 99th percentile ({baseline.p99:.2f})"
+                    if count > baseline.p99
+                    else f"Count ({count}) is more than 3 standard deviations from mean"
+                )
+            elif count > baseline.p95 or abs(z_score) > 2:
+                level = AlertLevel.WARNING
+                message = (
+                    f"Count ({count}) exceeds 95th percentile ({baseline.p95:.2f})"
+                    if count > baseline.p95
+                    else f"Count ({count}) is more than 2 standard deviations from mean"
+                )
 
-            if is_critical or is_warning:
+            if level:
                 anomalies.append(
-                    {
-                        "time": time,
-                        "status": status,
-                        "count": count,
-                        "level": "CRITICAL" if is_critical else "WARNING",
-                        "score": float(z_score),
-                        "message": message,
-                    }
+                    AnomalyBase(
+                        transaction=TransactionBase(
+                            time=time, status=TransactionStatus(status), count=count
+                        ),
+                        level=level,
+                        score=float(z_score),
+                        message=message,
+                    )
                 )
 
         return anomalies

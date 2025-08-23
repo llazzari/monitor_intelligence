@@ -1,8 +1,10 @@
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+from pydantic import Field as PydanticField
+from sqlmodel import JSON, Column, Field, SQLModel
 
 
 class TransactionStatus(str, Enum):
@@ -15,36 +17,69 @@ class TransactionStatus(str, Enum):
     FAILED = "failed"
 
 
+class TransactionBase(SQLModel):
+    time: str = PydanticField(
+        examples=["00h 00", "23h 59"]
+    )  # in a real app would be a datetime
+    status: TransactionStatus
+    count: int
+
+
+class TransactionDB(TransactionBase, table=True):
+    __tablename__ = "transactions"  # type: ignore
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
 class AlertLevel(str, Enum):
     WARNING = "WARNING"
     CRITICAL = "CRITICAL"
 
 
-class Transaction(BaseModel):
-    time: str = Field(examples=["00h 00"])
-    status: TransactionStatus
-    count: int
-
-
-class Anomaly(BaseModel):
-    time: str
-    status: TransactionStatus
-    count: int
+class AnomalyBase(SQLModel):
+    transaction: TransactionBase
     level: AlertLevel
     score: float
     message: str
 
+    class Config:
+        arbitrary_types_allowed = True
+
+
+class AnomalyDB(AnomalyBase, table=True):
+    __tablename__ = "anomalies"  # type: ignore
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    transaction: TransactionBase = Field(sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=datetime.now)
+
 
 class AnomalyResponse(BaseModel):
     message: str
-    anomalies: List[Anomaly] = []
+    anomalies: list[AnomalyBase] = []
+
+
+class Stats(SQLModel):
+    mean: float
+    std: float
+    p95: float
+    p99: float
+
+
+class BaselineDB(Stats, table=True):
+    __tablename__ = "baselines"  # type: ignore
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    status: TransactionStatus
+    updated_at: datetime = Field(default_factory=datetime.now)
 
 
 class TransactionQuery(BaseModel):
-    start_hour: Optional[str] = Field(
+    start_hour: Optional[str] = PydanticField(
         None, examples=["00h 00"], pattern=r"^\d{2}h \d{2}$"
     )
-    end_hour: Optional[str] = Field(
+    end_hour: Optional[str] = PydanticField(
         None, examples=["23h 59"], pattern=r"^\d{2}h \d{2}$"
     )
     status: Optional[TransactionStatus] = None
@@ -64,4 +99,4 @@ class BaselineStats(BaseModel):
     std_dev: float
     percentile_95: float
     percentile_99: float
-    updated_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = PydanticField(default_factory=datetime.now)

@@ -2,7 +2,8 @@ import os
 import smtplib
 from datetime import datetime
 from email.mime.text import MIMEText
-from typing import Dict, List
+
+from .models import AnomalyBase
 
 
 class NotificationService:
@@ -14,13 +15,13 @@ class NotificationService:
         self.smtp_pass = os.getenv("SMTP_PASS", "your-app-password")
         self.recipients = os.getenv("ALERT_RECIPIENTS", "team@company.com").split(",")
 
-    def send_alert(self, anomalies: List[Dict[str, float | str]]):
+    def send_alert(self, anomalies: list[AnomalyBase]):
         if not anomalies:
             return
 
         # Group anomalies by level
-        critical = [a for a in anomalies if a["level"] == "CRITICAL"]
-        warnings = [a for a in anomalies if a["level"] == "WARNING"]
+        critical = [a for a in anomalies if a.level == "CRITICAL"]
+        warnings = [a for a in anomalies if a.level == "WARNING"]
 
         # Create message
         subject = f"Transaction Anomalies Detected - {len(critical)} Critical, {len(warnings)} Warnings"
@@ -42,8 +43,8 @@ class NotificationService:
 
     def _format_alert_message(
         self,
-        critical: List[Dict[str, float | str]],
-        warnings: List[Dict[str, float | str]],
+        critical: list[AnomalyBase],
+        warnings: list[AnomalyBase],
     ) -> str:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -58,11 +59,11 @@ class NotificationService:
 
         for anomaly in critical:
             message += f"""
-            Time: {anomaly["time"]}
-            Status: {anomaly["status"]}
-            Count: {anomaly["count"]}
-            Score: {anomaly["score"]:.2f}
-            Reason: {anomaly["message"]}
+            Time: {anomaly.transaction.time}
+            Status: {anomaly.transaction.status}
+            Count: {anomaly.transaction.count}
+            Score: {anomaly.score:.2f}
+            Reason: {anomaly.message}
             """
 
         if warnings:
@@ -74,11 +75,11 @@ class NotificationService:
 
             for anomaly in warnings:
                 message += f"""
-                Time: {anomaly["time"]}
-                Status: {anomaly["status"]}
-                Count: {anomaly["count"]}
-                Score: {anomaly["score"]:.2f}
-                Reason: {anomaly["message"]}
+                Time: {anomaly.transaction.time}
+                Status: {anomaly.transaction.status}
+                Count: {anomaly.transaction.count}
+                Score: {anomaly.score:.2f}
+                Reason: {anomaly.message}
                 """
 
         return message
