@@ -1,0 +1,84 @@
+import os
+import smtplib
+from datetime import datetime
+from email.mime.text import MIMEText
+from typing import Dict, List
+
+
+class NotificationService:
+    def __init__(self):
+        # In production, these would be environment variables
+        self.smtp_host = "smtp.gmail.com"
+        self.smtp_port = 587
+        self.smtp_user = os.getenv("SMTP_USER", "your-email@gmail.com")
+        self.smtp_pass = os.getenv("SMTP_PASS", "your-app-password")
+        self.recipients = os.getenv("ALERT_RECIPIENTS", "team@company.com").split(",")
+
+    def send_alert(self, anomalies: List[Dict[str, float | str]]):
+        if not anomalies:
+            return
+
+        # Group anomalies by level
+        critical = [a for a in anomalies if a["level"] == "CRITICAL"]
+        warnings = [a for a in anomalies if a["level"] == "WARNING"]
+
+        # Create message
+        subject = f"Transaction Anomalies Detected - {len(critical)} Critical, {len(warnings)} Warnings"
+        body = self._format_alert_message(critical, warnings)
+
+        # Send email
+        try:
+            msg = MIMEText(body)
+            msg["Subject"] = subject
+            msg["From"] = self.smtp_user
+            msg["To"] = ", ".join(self.recipients)
+
+            with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
+                server.starttls()
+                server.login(self.smtp_user, self.smtp_pass)
+                server.send_message(msg)
+        except Exception as e:
+            print(f"Failed to send alert: {str(e)}")
+
+    def _format_alert_message(
+        self,
+        critical: List[Dict[str, float | str]],
+        warnings: List[Dict[str, float | str]],
+    ) -> str:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        message = f"""
+        Transaction Anomaly Alert
+        Generated at: {now}
+
+        {"=" * 50}
+        Critical Anomalies: {len(critical)}
+        {"=" * 50}
+        """
+
+        for anomaly in critical:
+            message += f"""
+            Time: {anomaly["time"]}
+            Status: {anomaly["status"]}
+            Count: {anomaly["count"]}
+            Score: {anomaly["score"]:.2f}
+            Reason: {anomaly["message"]}
+            """
+
+        if warnings:
+            message += f"""
+            {"=" * 50}
+            Warnings: {len(warnings)}
+            {"=" * 50}
+            """
+
+            for anomaly in warnings:
+                message += f"""
+                Time: {anomaly["time"]}
+                Status: {anomaly["status"]}
+                Count: {anomaly["count"]}
+                Score: {anomaly["score"]:.2f}
+                Reason: {anomaly["message"]}
+                """
+
+        return message

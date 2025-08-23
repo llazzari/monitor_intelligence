@@ -1,4 +1,4 @@
-time,status,f0_
+time,status,count
 00h 00,approved,9
 00h 00,denied,6
 00h 00,refunded,1
