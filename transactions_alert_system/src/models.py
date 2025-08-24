@@ -4,7 +4,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 from pydantic import Field as PydanticField
-from sqlmodel import JSON, Column, Field, SQLModel
+from sqlmodel import Field, SQLModel
 
 
 class TransactionStatus(str, Enum):
@@ -38,20 +38,18 @@ class AlertLevel(str, Enum):
 
 
 class AnomalyBase(SQLModel):
-    transaction: TransactionBase
+    time: str
+    status: TransactionStatus
+    count: int
     level: AlertLevel
     score: float
     message: str
-
-    class Config:
-        arbitrary_types_allowed = True
 
 
 class AnomalyDB(AnomalyBase, table=True):
     __tablename__ = "anomalies"  # type: ignore
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    transaction: TransactionBase = Field(sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=datetime.now)
 
 
