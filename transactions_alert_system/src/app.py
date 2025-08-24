@@ -24,7 +24,7 @@ from .session import engine, get_session, init_db
 DATA_PATH = pathlib.Path.cwd() / "transactions_alert_system" / "data"
 load_dotenv()
 
-WANTS_TRANSACTIONS_2_IN_DB = False  # if you want a clean database, set this to False
+WANTS_TRANSACTIONS_2_IN_DB = True  # if you want a clean database, set this to False
 
 
 @asynccontextmanager
