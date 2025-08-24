@@ -1,3 +1,5 @@
+from collections import defaultdict
+
 import pandas as pd
 from sqlmodel import Session, select
 
@@ -11,7 +13,7 @@ from .models import (
     TransactionStatus,
 )
 
-BAD_STATUS: list[str] = ["failed", "denied", "reversed"]
+BAD_STATUS: list[str] = ["failed", "denied", "reversed", "backend_reversed"]
 
 
 class AnomalyDetector:
@@ -21,7 +23,7 @@ class AnomalyDetector:
         self._load_baseline()
 
     def _get_baseline_by_status(self, df: pd.DataFrame) -> None:
-        """Get baseline statistics by transaction status"""
+        """Get baseline statistics by transaction status and hour"""
         for status in TransactionStatus:
             status_data = df[df["status"] == status.value]
             if not status_data.empty:
@@ -57,18 +59,21 @@ class AnomalyDetector:
         self, transactions: list[TransactionBase]
     ) -> list[AnomalyBase]:
         """Detect anomalies in transactions"""
+        print(f"\nStarting anomaly detection for {len(transactions)} transactions")
         anomalies: list[AnomalyBase] = []
-
-        # Group transactions by hour and status using defaultdict
-        from collections import defaultdict
 
         grouped_data: defaultdict[tuple[str, str], int] = defaultdict(int)
         for tx in transactions:
             grouped_data[(tx.status, tx.time)] += tx.count
 
+        print(f"Grouped data: {dict(grouped_data)}")
+        print(f"Available baseline stats: {list(self.baseline_stats.keys())}")
+
         # Process each group
         for (status, time), count in grouped_data.items():
+            print(f"\nProcessing {status} at {time} with count {count}")
             if status not in self.baseline_stats:
+                print(f"Skipping {status} - no baseline stats")
                 continue
 
             baseline = self.baseline_stats[status]
@@ -77,6 +82,7 @@ class AnomalyDetector:
 
             # Only check anomalies for bad status transactions
             if status not in BAD_STATUS:
+                print(f"Skipping {status} - not in BAD_STATUS {BAD_STATUS}")
                 continue
 
             # Determine anomaly level and message
@@ -101,9 +107,9 @@ class AnomalyDetector:
             if level:
                 anomalies.append(
                     AnomalyBase(
-                        transaction=TransactionBase(
-                            time=time, status=TransactionStatus(status), count=count
-                        ),
+                        time=time,
+                        status=TransactionStatus(status),
+                        count=count,
                         level=level,
                         score=float(z_score),
                         message=message,
