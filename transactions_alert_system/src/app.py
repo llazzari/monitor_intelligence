@@ -112,9 +112,13 @@ async def query_transactions(
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(session: Session = Depends(get_session)):
-    # Get transactions from the last hour (23h 00 to 23h 59)
+    # get highest hour in the database to present the newest data
+    statement = select(TransactionDB).order_by(TransactionDB.time.desc()).limit(1)
+    result: TransactionDB | None = session.exec(statement).first()
+    hour = int(result.time.split("h")[0]) if result else 16
+
     statement = select(TransactionDB).where(
-        TransactionDB.time >= "23h 00", TransactionDB.time <= "23h 59"
+        TransactionDB.time >= f"{hour}h 00", TransactionDB.time <= f"{hour}h 59"
     )
     transactions = session.exec(statement).all()
 
@@ -129,7 +133,6 @@ async def dashboard(session: Session = Depends(get_session)):
             content="<h2>No transactions found for the last hour</h2>", status_code=404
         )
 
-    # Convert to DataFrame
     df = pd.DataFrame([tx.model_dump() for tx in transactions])
 
     # Extract hour for sorting and convert to numeric for proper ordering
@@ -138,7 +141,7 @@ async def dashboard(session: Session = Depends(get_session)):
 
     # Get anomalies for the last hour
     anomaly_statement = select(AnomalyDB).where(
-        AnomalyDB.time >= "23h 00", AnomalyDB.time <= "23h 59"
+        AnomalyDB.time >= f"{hour}h 00", AnomalyDB.time <= f"{hour}h 59"
     )
     anomalies_db = session.exec(anomaly_statement).all()
     print(f"\nFound {len(anomalies_db)} anomalies in DB for the last hour")
@@ -276,7 +279,7 @@ async def dashboard(session: Session = Depends(get_session)):
                 
                 <div class="stats-container">
                     <div class="stat-box">
-                        <h3>Last Hour (23h)</h3>
+                        <h3>Chosen Hour ({hour}h)</h3>
                         <p>Total Transactions: {df["count"].sum()}</p>
                     </div>
                     <div class="stat-box">
