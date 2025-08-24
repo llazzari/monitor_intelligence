@@ -70,6 +70,7 @@ class BaselineDB(Stats, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     status: TransactionStatus
+    hour: int
     updated_at: datetime = Field(default_factory=datetime.now)
 
 
