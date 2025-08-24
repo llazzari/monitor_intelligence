@@ -59,9 +59,9 @@ class NotificationService:
 
         for anomaly in critical:
             message += f"""
-            Time: {anomaly.transaction.time}
-            Status: {anomaly.transaction.status}
-            Count: {anomaly.transaction.count}
+            Time: {anomaly.time}
+            Status: {anomaly.status}
+            Count: {anomaly.count}
             Score: {anomaly.score:.2f}
             Reason: {anomaly.message}
             """
@@ -75,9 +75,9 @@ class NotificationService:
 
             for anomaly in warnings:
                 message += f"""
-                Time: {anomaly.transaction.time}
-                Status: {anomaly.transaction.status}
-                Count: {anomaly.transaction.count}
+                Time: {anomaly.time}
+                Status: {anomaly.status}
+                Count: {anomaly.count}
                 Score: {anomaly.score:.2f}
                 Reason: {anomaly.message}
                 """

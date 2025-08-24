@@ -77,6 +77,8 @@ async def process_transactions(
             session.add(db_anomaly)
         notification_service.send_alert(anomalies)
 
+    detector.update_baseline(pd.DataFrame([tx.model_dump() for tx in transactions]))
+
     session.commit()
 
     return AnomalyResponse(
@@ -116,32 +118,34 @@ async def dashboard(session: Session = Depends(get_session)):
     )
     transactions = session.exec(statement).all()
 
+    print(f"\nFound {len(transactions)} transactions for the last hour")
+    print(
+        "Sample transactions:",
+        [f"{tx.time}: {tx.status}={tx.count}" for tx in transactions[:5]],
+    )
+
     if not transactions:
         return HTMLResponse(
             content="<h2>No transactions found for the last hour</h2>", status_code=404
         )
 
     # Convert to DataFrame
-    df = pd.DataFrame(
-        [
-            {
-                "time": tx.time,
-                "status": tx.status,
-                "count": tx.count,
-            }
-            for tx in transactions
-        ]
-    )
+    df = pd.DataFrame([tx.model_dump() for tx in transactions])
 
     # Extract hour for sorting and convert to numeric for proper ordering
     df["hour"] = df["time"].str.extract(r"(\d{2})h").astype(int)
     df = df.sort_values("hour")
 
-    # Get anomalies for the same time period
+    # Get anomalies for the last hour
     anomaly_statement = select(AnomalyDB).where(
-        AnomalyDB.transaction.time >= "23h 00", AnomalyDB.transaction.time <= "23h 59"
+        AnomalyDB.time >= "23h 00", AnomalyDB.time <= "23h 59"
     )
     anomalies_db = session.exec(anomaly_statement).all()
+    print(f"\nFound {len(anomalies_db)} anomalies in DB for the last hour")
+    print(
+        "Sample anomalies:",
+        [f"{a.time}: {a.status}={a.count} ({a.level})" for a in anomalies_db[:5]],
+    )
 
     # Create transaction volume plot
     fig1 = px.line(  # type: ignore
@@ -165,19 +169,19 @@ async def dashboard(session: Session = Depends(get_session)):
     # Add special markers for anomalies
     for status in df["status"].unique():
         # Filter anomalies for this status and print debug info
-        status_anomalies = [a for a in anomalies_db if a.transaction.status == status]
+        status_anomalies = [a for a in anomalies_db if a.status == status]
         print(f"Anomalies for status {status}:", len(status_anomalies))
 
         if status_anomalies:
             print(f"Adding markers for {status} anomalies:")
             for anomaly in status_anomalies:
                 print(
-                    f"  - time: {anomaly.transaction.time}, count: {anomaly.transaction.count}, level: {anomaly.level}"
+                    f"  - time: {anomaly.time}, count: {anomaly.count}, level: {anomaly.level}"
                 )
 
             fig1.add_scatter(  # type: ignore
-                x=[a.transaction.time for a in status_anomalies],
-                y=[a.transaction.count for a in status_anomalies],
+                x=[a.time for a in status_anomalies],
+                y=[a.count for a in status_anomalies],
                 mode="markers",
                 marker=dict(
                     symbol="star",
