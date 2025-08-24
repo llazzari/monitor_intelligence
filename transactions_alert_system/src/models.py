@@ -59,10 +59,11 @@ class AnomalyResponse(BaseModel):
 
 
 class Stats(SQLModel):
-    mean: float
-    std: float
-    p95: float
-    p99: float
+    mean: float = 0.0
+    std: float = 1.0
+    mad: float = 0.0
+    p95: float = 0.0
+    p99: float = 0.0
 
 
 class BaselineDB(Stats, table=True):

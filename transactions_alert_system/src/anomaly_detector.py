@@ -26,11 +26,9 @@ class AnomalyDetector:
     def _get_baseline_by_hour_and_status(self, df: pd.DataFrame) -> None:
         """Get baseline statistics by transaction status and hour"""
         df["hour"] = df["time"].str.extract(r"(\d{2})h").astype(int)
-        df_total_count = df.groupby("hour")["count"].sum()
         for hour in df["hour"].unique():
             hour = int(hour)
             self.baseline_stats[hour] = {}
-            total_count = int(df_total_count.iloc[hour])
             for status in TransactionStatus:
                 status_data = df[df["status"] == status.value]
                 if not status_data.empty:
@@ -42,7 +40,6 @@ class AnomalyDetector:
                         mad=float(status_data["count"].median()),
                         p95=float(status_data["count"].quantile(0.95)),
                         p99=float(status_data["count"].quantile(0.99)),
-                        total_count=total_count,
                     )
                     self.baseline_stats[hour][status.value] = stats
 

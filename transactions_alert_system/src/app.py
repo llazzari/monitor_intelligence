@@ -2,7 +2,7 @@ import pathlib
 from contextlib import asynccontextmanager
 
 import pandas as pd
-import plotly.express as px  # type: ignore
+import plotly.express as px
 from fastapi import Depends, FastAPI
 from fastapi.responses import HTMLResponse
 from sqlmodel import Session, select
