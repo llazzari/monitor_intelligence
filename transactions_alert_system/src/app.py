@@ -10,6 +10,7 @@ from sqlmodel import Session, select
 
 from .anomaly_detector import AnomalyDetector
 from .models import (
+    AnomalyBase,
     AnomalyDB,
     AnomalyResponse,
     TransactionBase,
@@ -23,6 +24,8 @@ from .session import engine, get_session, init_db
 DATA_PATH = pathlib.Path.cwd() / "transactions_alert_system" / "data"
 load_dotenv()
 
+WANTS_TRANSACTIONS_2_IN_DB = False  # if you want a clean database, set this to False
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -35,9 +38,8 @@ async def lifespan(app: FastAPI):
         historical_data = pd.read_csv(DATA_PATH / "transactions_1.csv")  # type: ignore
         detector.update_baseline(historical_data)
 
-        # Check if transactions_2.csv data is already in the database
         existing_data = session.exec(select(TransactionDB)).all()
-        if not existing_data:
+        if not existing_data and WANTS_TRANSACTIONS_2_IN_DB:
             new_data = pd.read_csv(DATA_PATH / "transactions_2.csv")  # type: ignore
             new_transactions = [
                 TransactionBase(**transaction)  # type: ignore
@@ -60,6 +62,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 notification_service = NotificationService()
+
+
+@app.get("/")
+async def read_root():
+    return {
+        "message": "Welcome to the Transactions Alert System. Please refer to the /docs endpoint for more information."
+    }
 
 
 @app.post("/transactions", response_model=AnomalyResponse)
@@ -117,7 +126,7 @@ async def dashboard(session: Session = Depends(get_session)):
     # get highest hour in the database to present the newest data
     statement = select(TransactionDB).order_by(TransactionDB.time.desc()).limit(1)
     result: TransactionDB | None = session.exec(statement).first()
-    hour = int(result.time.split("h")[0]) if result else 16
+    hour = int(result.time.split("h")[0]) if result else 23
 
     statement = select(TransactionDB).where(
         TransactionDB.time >= f"{hour}h 00", TransactionDB.time <= f"{hour}h 59"
@@ -132,7 +141,7 @@ async def dashboard(session: Session = Depends(get_session)):
 
     if not transactions:
         return HTMLResponse(
-            content="<h2>No transactions found for the last hour</h2>", status_code=404
+            content="<h2>No transactions found in the database.</h2>", status_code=404
         )
 
     df = pd.DataFrame([tx.model_dump() for tx in transactions])

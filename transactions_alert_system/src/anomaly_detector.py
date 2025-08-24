@@ -1,3 +1,4 @@
+import pathlib
 from typing import Optional, Tuple
 
 import numpy as np
@@ -322,8 +323,17 @@ class AnomalyDetector:
         # Save anomalies to CSV for debugging
         if anomalies:
             df_anom = pd.DataFrame([a.model_dump() for a in anomalies])
-            df_anom.to_csv(
-                "./transactions_alert_system/data/anomalies_detected.csv", index=False
+            df = df_anom.copy()
+            path = (
+                pathlib.Path.cwd()
+                / "transactions_alert_system"
+                / "data"
+                / "anomalies_detected.csv"
             )
+            if path.exists():
+                df_old = pd.read_csv(path)
+                df = pd.concat([df_old, df_anom], ignore_index=True)
+                df.sort_values(by=["time", "status"], inplace=True)
+            df.to_csv(path, index=False)
 
         return anomalies
