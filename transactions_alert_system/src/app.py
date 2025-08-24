@@ -9,7 +9,6 @@ from sqlmodel import Session, select
 
 from .anomaly_detector import AnomalyDetector
 from .models import (
-    AnomalyBase,
     AnomalyDB,
     AnomalyResponse,
     TransactionBase,
@@ -29,6 +28,7 @@ async def lifespan(app: FastAPI):
     # Initialize baseline on startup using transactions_1.csv data
     # Insert transactions_2.csv data into transactions.db (if it is not there yet)
     with Session(engine) as session:
+        global detector
         detector = AnomalyDetector(session)
         historical_data = pd.read_csv(DATA_PATH / "transactions_1.csv")  # type: ignore
         detector.update_baseline(historical_data)
