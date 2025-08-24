@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 import pandas as pd
 import plotly.express as px
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI
 from fastapi.responses import HTMLResponse
 from sqlmodel import Session, select
@@ -20,6 +21,7 @@ from .notification import NotificationService
 from .session import engine, get_session, init_db
 
 DATA_PATH = pathlib.Path.cwd() / "transactions_alert_system" / "data"
+load_dotenv()
 
 
 @asynccontextmanager
